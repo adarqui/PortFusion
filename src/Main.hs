@@ -47,6 +47,9 @@ import           GHC.Conc                    (numCapabilities)
 
 ---------------------------------------------------------------------------------------------UTILITY
 
+print' :: (Show a) => a -> IO ()
+print' = print
+
 type Seconds = Int
 secs     :: Int -> Seconds;                  secs         = (* 1000000)
 wait     :: Seconds -> IO ();                wait         = threadDelay . secs
@@ -60,7 +63,7 @@ a =>> f = do r <- a; _ <- f r; return r
 
 type ErrorIO = IO
 att    :: IO a  -> IO (Maybe a);       att    a = tryWith (const $! return Nothing) (Just <$> a)
-tryRun :: IO () -> IO ();              tryRun a = tryWith (\x -> do print x; wait 2) a
+tryRun :: IO () -> IO ();              tryRun a = tryWith (\x -> do print' x; wait 2) a
 (???)  :: ErrorIO a -> [IO a] -> IO a; e ??? as = foldr (?>) e as
   where x ?> y = x `X.catch` (\(_ :: X.SomeException) -> y)
 
@@ -131,11 +134,11 @@ a @>-<@ b = FusionLink <$> (att $! getPeerName a)<*>(att $! socketPort  b)<*>(at
   (f,a) <- (ap ?:)
   s <- socket f Stream 0x6 =>> \s -> mapM_ (\o -> setSocketOption s o 1) [ ReuseAddr, KeepAlive ]
   bindSocket s a; listen s maxListenQueue
-  print $! Listen :^: (faf f, ap)
+  print' $! Listen :^: (faf f, ap)
   return s
 
 (<@) :: Socket -> IO Socket
-(<@) s = do (c,_) <- accept s; configure c; print . (:.:) Accept =<< (c <@>); return c
+(<@) s = do (c,_) <- accept s; configure c; print' . (:.:) Accept =<< (c <@>); return c
 
 (.@.) :: Host -> Port -> IO Socket
 h .@. p = getAddrInfo hint host port >>= \as -> e as ??? map c as
@@ -147,7 +150,7 @@ h .@. p = getAddrInfo hint host port >>= \as -> e as ??? map c as
                   r <- s `connect`  addrAddress a // timeout (secs 3)
                   case r of
                     Nothing -> do (s ✖); X.throw $! Silence [addrAddress a]
-                    Just _  -> do print . (:.:) Open =<< (s <@>); return s
+                    Just _  -> do print' . (:.:) Open =<< (s <@>); return s
 
 (#@) :: Socket -> IO Handle
 (#@) s = socketToHandle s ReadWriteMode =>> (`hSetBuffering` NoBuffering)
@@ -159,7 +162,7 @@ h .@. p = getAddrInfo hint host port >>= \as -> e as ??? map c as
 class    Disposable a       where (✖) :: a -> IO ()
 instance Disposable Socket  where
   (✖) s = do
-    try_ $! print . (Close :.:) =<< (s <@>)
+    try_ $! print' . (Close :.:) =<< (s <@>)
     try_ $! shutdown s ShutdownBoth
     try_ $! sClose   s
 instance Disposable Peer          where (✖) (s :!: h) = do (s ✖); (h ✖)
@@ -196,15 +199,16 @@ copyright = "(c) 2012 Cetin Sert. All rights reserved."
 build     = __OS__ <> " - " <> __ARCH__ <>  " [" <> __TIMESTAMP__ <> "]"
 
 main :: IO ()
-main = withSocketsDo $! tryWith (const . print $! LS "INVALID SYNTAX") $! do
+main = do
+ withSocketsDo $! tryWith (const . print' $! LS "INVALID SYNTAX") $! do
   mapM_ B.putStrLn [ "\n", name, copyright, "", build, "\n" ]
   tasks <- parse <$> getArgs
   when   (null tasks) $! mapM_ B.putStrLn [ "  See usage: http://fusion.corsis.eu", "",""]
   unless (null tasks) $! do
-    when zeroCopy              $! print (LS "zeroCopy"       , zeroCopy       )
-    when (numCapabilities > 1) $! print (LS "numCapabilities", numCapabilities)
+    when zeroCopy              $! print' (LS "zeroCopy"       , zeroCopy       )
+    when (numCapabilities > 1) $! print' (LS "numCapabilities", numCapabilities)
     mapM_ (forkIO . run) tasks
-  void Prelude.getChar
+ forever $ do getLine
 
 parse :: [String] -> [Task]
 parse [         "]", ap, "["         ] = [(:><:) $! read ap                                        ]
@@ -250,13 +254,13 @@ initialize  :: IO   ();      initialize  = initialized `modifyMVar_` \initialize
   where
   watch ap p = void . forkIO $! withMVar portVectors $! \(V _ _ !t) -> do
     tp <- t |. p
-    print $! Watch :^: (LS . B.pack $! show tp, ap)
+    print' $! Watch :^: (LS . B.pack $! show tp, ap)
     void . schedule 10 $! do
       withMVar portVectors $! \ !(V !c !s !t) -> do
         n   <- c |. p
         tp' <- t |. p
         if n == 1 && tp == tp'
-          then do print $! Drop :^: (faf AF_UNSPEC, ap)
+          then do print' $! Drop :^: (faf AF_UNSPEC, ap)
                   c |^ p $! n-1
                   sv <- s |. p; deRefStablePtr sv >>= (✖); (sv ✖)
           else when (n == 1) $! watch ap p
@@ -291,7 +295,7 @@ run ((:><:) fp) = do
     serve o@(s :!: h) = do
       tryWith (const (o ✖)) $! do                        -- any exception disposes o
         q <- read . B.unpack <$> B.hGetLine h
-        print . (:.:) (Receive q) =<< (s <@>)
+        print' . (:.:) (Receive q) =<< (s <@>)
         case q of
           (:-<-:)    rp -> o -<-       rp
           (:->-:) rh rp -> o ->- rh $! rp
@@ -319,7 +323,7 @@ run ((lp,lh) :-<: ((fp,fh),rp)) = do
   forever . tryRun $! fh ! fp `X.bracketOnError` (✖) $! \f@(s :!: _) -> do
 
     let m = (:-<-:) rp
-    print . (:.:) (Send m) =<< (s <@>)
+    print' . (:.:) (Send m) =<< (s <@>)
     s <: m
     _ <- s `recv` 1
 
@@ -341,7 +345,7 @@ run (lp :>-: ((fh,fp),(rh,rp))) = do
 
       f@(s :!: _) <- fh ! fp
       let m = (:->-:) rh rp
-      print . (:.:) (Send m) =<< (s <@>)
+      print' . (:.:) (Send m) =<< (s <@>)
       s <:  m
       f >-< c $! return ()
 
@@ -364,9 +368,9 @@ run (lp :>=: (rh, rp)) = do
 (>-<) :: Peer -> Peer -> ErrorIO () -> IO ()
 (a@(!as :!: _ ) >-< b@(!bs :!: _ )) h = do
   !t <- as @>-<@ bs
-  print $! Establish ::: t
+  print' $! Establish ::: t
   !m <- newMVar True
-  let p = print $! Terminate ::: t
+  let p = print' $! Terminate ::: t
   let j = modifyMVar_ m $! \v -> do when v (do p; (a ✖); (b ✖); h); return False
   a >- b $! j
   b >- a $! j
